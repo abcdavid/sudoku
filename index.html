@@ -1,0 +1,321 @@
+<!DOCTYPE html>
+
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<style>
+.sudoku {
+margin: 0 auto;
+background-color: #ffffff;
+color: #888888;
+font-family: Arial, Helvetica, sans-serif;
+text-align: center;
+vertical-align: middle;
+}
+.square {
+border: 1px solid #000; /* this is updated to have thicker lines for some rows and columns */
+float: left;
+position: relative; /* to position helper grid */
+}
+.start .square-value { /* values which are starting puzzle */
+color: #000000;
+}
+.square-value {
+width: 100%;
+height: 100%;
+}
+.warn-duplicates .value-error .square-value { /* if 2 or more of this value are in any col / row / box */
+color: red;
+}
+.sudoku-helper-grid {
+display: none; /* do not display helper grid by default */
+width: 100%;
+height: 100%;
+position: absolute;
+top: 0.5%;
+left: 0.5%;
+}
+.square.set .sudoku-helper-grid { /* do not show helper grid when square value has been set */
+display: none;
+}
+.sudoku-helper-grid .helper-square {
+display: block;
+width: 33%;
+height: 33%;
+float: left;
+cursor: pointer;
+}
+.show-helper-grid-hover .square:hover .sudoku-helper-grid, .show-helper-grid .sudoku-helper-grid { 
+	display: block; /* show helper grid if this has been chosen as an option */
+}
+.show-helper-grid-hover .square.set:hover .sudoku-helper-grid {
+	display: none; /* do not show helper grid on hover if square value has been set */
+}
+/* hide values in the helper grid which have already been used when this option has been set */
+.hide-used .sudoku-helper-grid .helper-square.used .helper-square-value {
+display: none;
+}
+</style>
+<script src="js/jquery-1.11.0.min.js">
+</script>
+<script>
+/* TODO:
+history what happens if action in middle of history array?
+load / save game data
+timer to solution / high score table
+scan from photo?
+*/
+/*** Sudoku Class ***/
+var Sudoku=function() {
+	this.showHelperGridClick=false;
+	this.showHelperGridHover=true;
+	this.hideHelperGridUsed=true;
+	this.warnDuplicates=true;
+	this.history=[];
+	this.historyPos=0;
+};
+Sudoku.MIN_WIDTH=300;
+Sudoku.CLASS_SUDOKU='sudoku';
+Sudoku.CLASS_SQUARE='square';
+Sudoku.CLASS_VALUE='square-value';
+Sudoku.CLASS_HELPER_GRID='sudoku-helper-grid';
+Sudoku.CLASS_HELPER_SQUARE='helper-square';
+Sudoku.CLASS_COL_PREFIX='col-';
+Sudoku.CLASS_ROW_PREFIX='row-';
+Sudoku.CLASS_BOX_PREFIX='box-';
+Sudoku.CLASS_HELPER_SQUARE_USED='used';
+Sudoku.CLASS_VALUE_SET='set';
+Sudoku.CLASS_VALUE_START='start';
+Sudoku.CLASS_VALUE_DUPLICATE='value-error';
+Sudoku.CLASS_SHOW_HELPER_GRID_CLICK='show-helper-grid-click'; // show the helper grid on clicking each square
+Sudoku.CLASS_SHOW_HELPER_GRID_HOVER='show-helper-grid-hover'; // show the helper grid on hovering over each square 
+Sudoku.CLASS_HIDE_HELPER_GRID_USED='hide-used'; // hide values which have already been used (in column, row, or box)
+Sudoku.CLASS_WARN_DUPLICATES='warn-duplicates';
+
+Sudoku.prototype.getHtml=function() {
+	return this.element || this.generateGridHtml();
+};
+Sudoku.prototype.generateGridHtml=function() {
+	this.element=$('<div class="'+Sudoku.CLASS_SUDOKU+'"></div>');
+	if (this.showHelperGridClick) { this.element.addClass(Sudoku.CLASS_SHOW_HELPER_GRID_CLICK); }
+	if (this.showHelperGridHover) { this.element.addClass(Sudoku.CLASS_SHOW_HELPER_GRID_HOVER); }
+	if (this.hideHelperGridUsed) { this.element.addClass(Sudoku.CLASS_HIDE_HELPER_GRID_USED); }
+	if (this.warnDuplicates) { this.element.addClass(Sudoku.CLASS_WARN_DUPLICATES); }
+	var i,j,square;
+	for (j=0;j<9;j++) { // index from top left (0,0)
+		for (i=0;i<9;i++) {
+			square=new Square(this,i,j);
+			square.generateSquareHtml();
+  	}
+  }
+  this.setSize(Math.min($(window).height(),$(window).width()));
+  return this.element;
+};
+Sudoku.prototype.setSize=function(size,thinBorder,thickBorder) {
+	if (isNaN(size) || size<Sudoku.MIN_WIDTH) { return; }
+	thinBorder = typeof thinBorder !== 'undefined' ? thinBorder : 1;
+	thickBorder = typeof thickBorder !== 'undefined' ? thickBorder : 4;
+	var squareWidth=Math.floor((size-6*thinBorder-4*thickBorder)/9);
+	var helperSquareWidth=Math.floor(squareWidth/3);
+	var fontSize=squareWidth;
+	var helperFontSize=helperSquareWidth;
+	this.element.css({'width': size+'px','height': size+'px'});
+	this.element.find('.'+Sudoku.CLASS_HELPER_GRID).css({'font-size':helperFontSize+'px','line-height':helperSquareWidth+'px'});
+	this.element.find('.'+Sudoku.CLASS_SQUARE).css({'width':squareWidth+'px','height':squareWidth+'px','border-width':0,'font-size':fontSize+'px','line-height':squareWidth+'px'});
+	/* the thick borders */
+	this.element.find('.'+Sudoku.CLASS_COL_PREFIX+'0,.'+Sudoku.CLASS_COL_PREFIX+'3,.'+Sudoku.CLASS_COL_PREFIX+'6').css('border-left-width',thickBorder+'px');
+	this.element.find('.'+Sudoku.CLASS_ROW_PREFIX+'0,.'+Sudoku.CLASS_ROW_PREFIX+'3,.'+Sudoku.CLASS_ROW_PREFIX+'6').css('border-top-width',thickBorder+'px');
+	this.element.find('.'+Sudoku.CLASS_COL_PREFIX+'8').css('border-right-width',thickBorder+'px');
+	this.element.find('.'+Sudoku.CLASS_ROW_PREFIX+'8').css('border-bottom-width',thickBorder+'px');
+	/* the thin borders */
+	this.element.find('.'+Sudoku.CLASS_COL_PREFIX+'1,.'+Sudoku.CLASS_COL_PREFIX+'2,.'+Sudoku.CLASS_COL_PREFIX+'4,.'+Sudoku.CLASS_COL_PREFIX+'5,.'+Sudoku.CLASS_COL_PREFIX+'7,.'+Sudoku.CLASS_COL_PREFIX+'8').css('border-left-width',thinBorder+'px');
+	this.element.find('.'+Sudoku.CLASS_ROW_PREFIX+'1,.'+Sudoku.CLASS_ROW_PREFIX+'2,.'+Sudoku.CLASS_ROW_PREFIX+'4,.'+Sudoku.CLASS_ROW_PREFIX+'5,.'+Sudoku.CLASS_ROW_PREFIX+'7,.'+Sudoku.CLASS_ROW_PREFIX+'8').css('border-top-width',thinBorder+'px');
+	/* start a new row */
+	this.element.find('.'+Sudoku.CLASS_COL_PREFIX+'0').css('clear','left');
+};
+Sudoku.prototype.undo=function() {
+	if (this.historyPos>0) {
+		this.historyPos--;
+		if (this.historyPos<this.history.length) {
+			changeEvent=this.history[this.historyPos];
+			changeEvent.undo();
+		}
+	}
+};
+Sudoku.prototype.redo=function() {
+	if (this.historyPos<this.history.length) {
+		changeEvent=this.history[this.historyPos];
+		changeEvent.redo();
+		if (this.historyPos<this.history.length) { this.historyPos++; }
+	}
+};
+Sudoku.prototype.setPuzzle=function() { // all values set so far make up the starting puzzle
+	this.element.find('.'+Sudoku.CLASS_SQUARE+'.'+Sudoku.CLASS_VALUE_SET).addClass(Sudoku.CLASS_VALUE_START);
+	this.history=[];
+	this.historyPos=0;
+};
+/*** Square Class ***/
+var Square=function(sudoku,i,j) { /* indexing from 0 to 8 */
+	this.sudoku=sudoku;
+	this.col=Math.max(0,Math.min(i,8));
+	this.row=Math.max(0,Math.min(j,8));;
+	this.box=Math.floor(this.col/3) + 3*Math.floor(this.row/3);
+	this.value='';
+};
+Square.prototype.generateSquareHtml=function() {
+	var square=this;
+	var sudoku=this.sudoku;
+	this.element=$('<div class="'+Sudoku.CLASS_SQUARE+' '+Sudoku.CLASS_COL_PREFIX+this.col+' '+Sudoku.CLASS_ROW_PREFIX+this.row+' '+Sudoku.CLASS_BOX_PREFIX+this.box+'"></div>');
+	this.element.data('square',this);
+	this.generateHelperGrid(this.element);
+	this.valueElement=$('<div class="'+Sudoku.CLASS_VALUE+'"></div>');
+	this.valueElement.click(function() {
+		if (square.value.length>0) {
+			sudoku.history[sudoku.historyPos]=new ChangeEvent(square,square.value,true);
+			sudoku.historyPos++;
+			square.unsetValue();
+		}
+		if (sudoku.showHelperGridClick) {
+			square.helperGrid.show(); 
+		}
+	});
+	this.element.append(this.valueElement);
+	this.sudoku.element.append(this.element);
+};
+Square.prototype.generateHelperGrid=function(squareEl) {
+	var square=this;
+	this.helperGrid=$('<div class="'+Sudoku.CLASS_HELPER_GRID+'"></div>');
+	for (var i=1;i<10;i++) {
+		this.helperSquare=$('<div class="'+Sudoku.CLASS_HELPER_SQUARE+'"><div class="helper-square-value">'+i+'</div></div>');
+		this.helperSquare.data('square',square);
+		this.helperSquare.data('count',0);
+		this.helperSquare.click(function() {
+			square.setValue($(this).text());
+			square.sudoku.history[square.sudoku.historyPos]=new ChangeEvent(square,square.value,false);
+			square.sudoku.historyPos++;
+			if (square.sudoku.showHelperGridClick) {
+				square.helperGrid.hide();
+			}
+		});
+		this.helperGrid.append(this.helperSquare);
+	}
+	squareEl.append(this.helperGrid);
+	this.helperGrid.hover(function() {
+	},function() {
+		if (square.sudoku.showHelperGridClick) {
+			square.helperGrid.hide(); 
+		}
+	});
+};
+Square.prototype.setValue=function(value) {
+	if (value.length==0) {
+		return;
+	}
+	if (this.value!=value) {
+		var square=this;
+		this.unsetValue();
+		this.value=value;
+		this.valueElement.text(value);
+		s=this.getHelperSquareSelector(value);
+		this.sudoku.element.find(s).each(function(i,el) { // update tally of each value in col/row/box
+			var helperSquare=$(el);
+			var count=helperSquare.data('count');
+			count++;
+			helperSquare.data('count',count);
+			var squareData=helperSquare.data('square');
+			if (count==1) {
+				helperSquare.addClass(Sudoku.CLASS_HELPER_SQUARE_USED);
+			}
+			if (count>=2 && (squareData.value==value/* || square===squareData*/)) { // an error if more than one item in col / row / box
+				squareData.element.addClass(Sudoku.CLASS_VALUE_DUPLICATE);
+			}
+		});
+		if (!square.element.hasClass(Sudoku.CLASS_VALUE_SET)) {
+			square.element.addClass(Sudoku.CLASS_VALUE_SET);
+		}
+	}
+};
+Square.prototype.unsetValue=function() {
+	var square=this;
+	if (this.value.length>0) {
+		s=this.getHelperSquareSelector(this.value);
+		this.sudoku.element.find(s).each(function(i,el) { // update tally of each value in col/row/box
+			var helperSquare=$(el);
+			var count=helperSquare.data('count');
+			count--;
+			helperSquare.data('count',count);
+			var squareData=helperSquare.data('square');
+			if (count==0) {
+				helperSquare.removeClass(Sudoku.CLASS_HELPER_SQUARE_USED);
+			}
+			if (count==1 && (squareData.value==square.value/* || square===squareData*/)) { // no longer an error if only one item in col / row / box
+				squareData.element.removeClass(Sudoku.CLASS_VALUE_DUPLICATE);
+			}
+		});
+		square.element.removeClass(Sudoku.CLASS_VALUE_DUPLICATE); // if applicable
+		square.element.removeClass(Sudoku.CLASS_VALUE_SET);
+		this.value='';
+		this.valueElement.text('');
+	}
+};
+Square.prototype.getHelperSquareSelector=function(value) {
+	var s='';
+	var suffix=' .'+Sudoku.CLASS_HELPER_SQUARE+':contains('+value+')';
+	var classList=this.element.attr('class').split(/\s+/);
+	for (var i=0;i<classList.length;i++) {
+		if (classList[i].match(/(row|col|box)-[0-8]/)) {
+			if (s.length>0) s+=',';
+			s+='.square.'+classList[i]+suffix;
+		}
+	}
+	return s;
+};
+var ChangeEvent=function(square,value,unset) {
+	this.square=square;
+	this.value=value;
+	this.unset=unset;
+};
+ChangeEvent.prototype.redo=function() {
+	if (this.unset) {
+		this.square.unsetValue();
+	} else {
+		this.square.setValue(this.value);
+	}
+};
+ChangeEvent.prototype.undo=function() {
+	if (this.unset) {
+		this.square.setValue(this.value);
+	} else {
+		this.square.unsetValue();
+	}
+};
+$(document).ready(function() {
+	var s=new Sudoku();
+	$('body').append(s.getHtml());
+	$('input[name="undo"]').click(function() {
+		s.undo();
+	});
+	$('input[name="redo"]').click(function() {
+		s.redo();
+	});
+	$('input[name="puzzle"]').click(function() {
+		s.setPuzzle();
+	});
+	$('input[name="size"]').click(function() {
+		var n=parseInt(prompt('Enter font size in pixels'));
+		s.setSize(n);
+	});
+/*	$(window).resize(function() {
+		s.setSize(Math.min($(window).width(),$(window).height()));
+//		alert('resizing');
+	});*/
+});
+</script>
+</head>
+<body>
+<input type="button" name="undo" value="undo"/><br />
+<input type="button" name="redo" value="redo"/><br />
+<input type="button" name="puzzle" value="puzzle"/><br />
+<input type="button" name="size" value="size"/><br />
+</body>
+</html>
